@@ -95,6 +95,42 @@ class JavaSocket:
         self._socket.close()
 
 
+NewConnectionMsg = typing.TypedDict('NewConnectionMsg', {
+    'type': str,
+    'version': str
+})
+
+
+# CommandMsg = typing.TypedDict("CommandMsg", {
+#     'command': str,
+#     'classpath': str,
+#     'argument-types': str,
+#     'arguments': str,
+#     'new-port': bool
+#     },
+# total=False)
+
+MethodSpec = typing.TypedDict('MethodSpecs', {
+    'arguments': typing.List[str],
+    'name': str,
+    'return-type': str
+})
+
+SerializedObject = typing.TypedDict('SerializedObject', {
+    "type": str,  # Should be "unserialized-object"
+    'class': str,
+    'fields': typing.List[str],
+    'api': typing.List[MethodSpec],
+    'hashcode': int,
+    'interfaces': typing.List[str]
+})
+
+BasicSerializedObject = typing.TypedDict('BasicSerializedObject', {
+    'type': str,
+    'value': typing.Any
+})
+
+
 class Bridge:
     """
     Create an object which acts as a client to a corresponding server running within micro-manager.
@@ -102,7 +138,6 @@ class Bridge:
     """
     _DEFAULT_PORT = 4827
     _EXPECTED_ZMQ_SERVER_VERSION = '2.5.0'
-
 
     def __init__(self, port=_DEFAULT_PORT, convert_camel_case=True, debug=False):
         """
@@ -121,19 +156,20 @@ class Bridge:
         self._master_socket = JavaSocket(self._context, port, zmq.REQ, debug=debug)
         self._master_socket.send({'command': 'connect', })
         self._class_factory = JavaClassFactory()
-        reply_json = self._master_socket.receive(timeout=500)
+        reply_json: NewConnectionMsg = self._master_socket.receive(timeout=500)
         if reply_json is None:
             raise TimeoutError("Socket timed out after 500 milliseconds. Is Micro-Manager running and is the ZMQ server option enabled?")
         if reply_json['type'] == 'exception':
-            raise Exception(reply_json['message'])
-        if 'version' not in reply_json:
+            reply_json: BasicSerializedObject
+            raise Exception(reply_json['value'])
+        if 'version' not in reply_json: # TODO can this be removed?, we aren't compatible with old server versions anyway.
             reply_json['version'] = '2.0.0' #before version was added
         if reply_json['version'] != self._EXPECTED_ZMQ_SERVER_VERSION:
-            warnings.warn('Version mistmatch between Java ZMQ server and Python client. '
+            warnings.warn('Version mismatch between Java ZMQ server and Python client. '
                             '\nJava ZMQ server version: {}\nPython client expected version: {}'.format(reply_json['version'],
                                                                                            self._EXPECTED_ZMQ_SERVER_VERSION))
 
-    def get_class(self, serialized_object) -> typing.Type[JavaObjectShadow]:
+    def get_class(self, serialized_object: SerializedObject) -> typing.Type[JavaObjectShadow]:
         return self._class_factory.create(serialized_object, convert_camel_case=self._convert_camel_case)
 
     def construct_java_object(self, classpath, new_socket=False, args=None):
@@ -226,7 +262,7 @@ class JavaClassFactory:
     def __init__(self):
         self.classes = {}
 
-    def create(self, serialized_obj: dict, convert_camel_case: bool = True) -> typing.Type[JavaObjectShadow]:
+    def create(self, serialized_obj: SerializedObject, convert_camel_case: bool = True) -> typing.Type[JavaObjectShadow]:
         """Create a class (or return a class from the cache) based on the contents of `serialized_object` message."""
         if serialized_obj['class'] in self.classes.keys():  # Return a cached class
             return self.classes[serialized_obj['class']]
@@ -331,7 +367,7 @@ class JavaObjectShadow:
         self._socket.send(message)
         return self._deserialize(self._socket.receive())
 
-    def _deserialize(self, json_return):
+    def _deserialize(self, json_return: BasicSerializedObject):
         """
         :param method_spec: info about the method that called it
         :param reply: bytes that represents return
@@ -353,6 +389,7 @@ class JavaObjectShadow:
             else:
                 raise Exception('Unrecognized return class')
         elif json_return['type'] == 'unserialized-object':
+            json_return: SerializedObject
             #inherit socket from parent object
             return self._bridge.get_class(json_return)(socket=self._socket, serialized_object=json_return, bridge=self._bridge)
         else:
@@ -381,7 +418,7 @@ def deserialize_array(json_return):
         return np.frombuffer(standard_b64decode(json_return['value']), dtype='>f4').copy()
 
 
-def _package_arguments(valid_method_spec, fn_args):
+def _package_arguments(valid_method_spec: MethodSpec, fn_args):
     """
     Serialize function arguments and also include description of their Java types
     :param valid_method_spec:
@@ -405,10 +442,10 @@ def _serialize_arg(arg):
     elif isinstance(arg, JavaObjectShadow):
         return {'hash-code': arg._hash_code}
     else:
-        raise Exception('Unknown argumetn type')
+        raise Exception('Unknown argument type')
 
 
-def _check_method_args(method_specs, fn_args):
+def _check_method_args(method_specs: typing.List[MethodSpec], fn_args):
     """
     Compare python arguments to java arguments to find correct function to call
     :param method_specs:
@@ -442,7 +479,7 @@ def _check_method_args(method_specs, fn_args):
     return valid_method_spec
 
 
-def _parse_arg_names(methods, method_name, convert_camel_case):
+def _parse_arg_names(methods: typing.List[MethodSpec], method_name: str, convert_camel_case: bool) -> typing.Tuple[typing.List[inspect.Parameter], typing.List[MethodSpec], str]:
     method_name_modified = _camel_case_2_snake_case(method_name) if convert_camel_case else method_name
     # all methods with this name and different argument lists
     methods_with_name = [m for m in methods if m['name'] == method_name]
@@ -474,7 +511,7 @@ def _parse_arg_names(methods, method_name, convert_camel_case):
     return params, methods_with_name, method_name_modified
 
 
-def _camel_case_2_snake_case(name):
+def _camel_case_2_snake_case(name: str):
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 

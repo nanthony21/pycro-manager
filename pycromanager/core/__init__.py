@@ -9,6 +9,9 @@ import inspect
 import numpy as np
 import zmq
 
+from ._consts import NewConnectionMsg, MethodSpec, SerializedObject, BasicSerializedObject, _CLASS_NAME_MAPPING, \
+    _ARRAY_TYPE_TO_NUMPY_DTYPE, _JAVA_TYPE_NAME_TO_PYTHON_TYPE
+
 
 class JavaSocket:
     """
@@ -95,42 +98,6 @@ class JavaSocket:
         self._socket.close()
 
 
-NewConnectionMsg = typing.TypedDict('NewConnectionMsg', {
-    'type': str,
-    'version': str
-})
-
-
-# CommandMsg = typing.TypedDict("CommandMsg", {
-#     'command': str,
-#     'classpath': str,
-#     'argument-types': str,
-#     'arguments': str,
-#     'new-port': bool
-#     },
-# total=False)
-
-MethodSpec = typing.TypedDict('MethodSpecs', {
-    'arguments': typing.List[str],
-    'name': str,
-    'return-type': str
-})
-
-SerializedObject = typing.TypedDict('SerializedObject', {
-    "type": str,  # Should be "unserialized-object"
-    'class': str,
-    'fields': typing.List[str],
-    'api': typing.List[MethodSpec],
-    'hashcode': int,
-    'interfaces': typing.List[str]
-})
-
-BasicSerializedObject = typing.TypedDict('BasicSerializedObject', {
-    'type': str,
-    'value': typing.Any
-})
-
-
 class Bridge:
     """
     Create an object which acts as a client to a corresponding server running within micro-manager.
@@ -159,9 +126,6 @@ class Bridge:
         reply_json: NewConnectionMsg = self._master_socket.receive(timeout=500)
         if reply_json is None:
             raise TimeoutError("Socket timed out after 500 milliseconds. Is Micro-Manager running and is the ZMQ server option enabled?")
-        if reply_json['type'] == 'exception':
-            reply_json: BasicSerializedObject
-            raise Exception(reply_json['value'])
         if 'version' not in reply_json: # TODO can this be removed?, we aren't compatible with old server versions anyway.
             reply_json['version'] = '2.0.0' #before version was added
         if reply_json['version'] != self._EXPECTED_ZMQ_SERVER_VERSION:
@@ -172,7 +136,7 @@ class Bridge:
     def get_class(self, serialized_object: SerializedObject) -> typing.Type[JavaObjectShadow]:
         return self._class_factory.create(serialized_object, convert_camel_case=self._convert_camel_case)
 
-    def construct_java_object(self, classpath, new_socket=False, args=None):
+    def construct_java_object(self, classpath: str, new_socket=False, args=None):
         """
         Create a new instance of a an object on the Java side. Returns a Python "Shadow" of the object, which behaves
         just like the object on the Java side (i.e. same methods, fields). Methods of the object can be inferred at
@@ -279,11 +243,11 @@ class JavaClassFactory:
                 fields[field] = property(fget=getter, fset=setter)
 
             methods = {}  # Create a dict of methods for the class by name.
-            methodSpecs = serialized_obj['api']
-            method_names = set([m['name'] for m in methodSpecs])
+            method_specs = serialized_obj['api']
+            method_names = set([m['name'] for m in method_specs])
             # parse method descriptions to make python stand ins
             for method_name in method_names:
-                params, methods_with_name, method_name_modified = _parse_arg_names(methodSpecs, method_name, convert_camel_case)
+                params, methods_with_name, method_name_modified = _parse_arg_names(method_specs, method_name, convert_camel_case)
                 return_type = methods_with_name[0]['return-type']
                 fn = lambda instance, *args, signatures_list=tuple(methods_with_name): instance._translate_call(signatures_list, args)
                 fn.__name__ = method_name_modified
@@ -328,8 +292,6 @@ class JavaObjectShadow:
         message = {'command': 'destructor', 'hash-code': self._hash_code}
         self._socket.send(message)
         reply_json = self._socket.receive()
-        if reply_json['type'] == 'exception':
-            raise Exception(reply_json['value'])
 
     def _access_field(self, name):
         """
@@ -349,7 +311,7 @@ class JavaObjectShadow:
         self._socket.send(message)
         reply = self._deserialize(self._socket.receive())
 
-    def _translate_call(self, method_specs, fn_args: tuple):
+    def _translate_call(self, method_specs: typing.List[MethodSpec], fn_args: tuple):
         """
         Translate to appropriate Java method, call it, and return converted python version of its result
         :param args: args[0] is list of dictionaries of possible method specifications
@@ -361,8 +323,8 @@ class JavaObjectShadow:
         valid_method_spec = _check_method_args(method_specs, fn_args)
         #args are good, make call through socket, casting the correct type if needed (e.g. int to float)
         message = {'command': 'run-method', 'hash-code': self._hash_code, 'name': valid_method_spec['name'],
-                   'argument-types': valid_method_spec['arguments']}
-        message['arguments'] = _package_arguments(valid_method_spec, fn_args)
+                   'argument-types': valid_method_spec['arguments'],
+                   'arguments': _package_arguments(valid_method_spec, fn_args)}
 
         self._socket.send(message)
         return self._deserialize(self._socket.receive())
@@ -373,9 +335,7 @@ class JavaObjectShadow:
         :param reply: bytes that represents return
         :return: an appropriate python type of the converted value
         """
-        if json_return['type'] == 'exception':
-            raise Exception(json_return['value'])
-        elif json_return['type'] == 'null':
+        if json_return['type'] == 'null':
             return None
         elif json_return['type'] == 'primitive':
             return json_return['value']
@@ -396,11 +356,11 @@ class JavaObjectShadow:
             return deserialize_array(json_return)
 
 
-def serialize_array(array):
+def serialize_array(array: np.ndarray) -> bytes:
     return standard_b64encode(array.tobytes()).decode('utf-8')
 
 
-def deserialize_array(json_return):
+def deserialize_array(json_return: BasicSerializedObject) -> np.ndarray:
     """
     Convert a serialized java array to the appropriate numpy type
     :param json_return:
@@ -479,7 +439,8 @@ def _check_method_args(method_specs: typing.List[MethodSpec], fn_args):
     return valid_method_spec
 
 
-def _parse_arg_names(methods: typing.List[MethodSpec], method_name: str, convert_camel_case: bool) -> typing.Tuple[typing.List[inspect.Parameter], typing.List[MethodSpec], str]:
+def _parse_arg_names(methods: typing.List[MethodSpec], method_name: str, convert_camel_case: bool) -> typing.Tuple[typing.List[inspect.Parameter], typing.List[
+    MethodSpec], str]:
     method_name_modified = _camel_case_2_snake_case(method_name) if convert_camel_case else method_name
     # all methods with this name and different argument lists
     methods_with_name = [m for m in methods if m['name'] == method_name]
@@ -515,17 +476,6 @@ def _camel_case_2_snake_case(name: str):
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
-
-_CLASS_NAME_MAPPING = {'boolean': 'boolean', 'byte[]': 'uint8array',
-                       'double': 'float', 'double[]': 'float64_array', 'float': 'float',
-                       'int': 'int', 'int[]': 'uint32_array', 'java.lang.String': 'string',
-                       'long': 'int', 'short': 'int', 'void': 'void',
-                       'java.util.List': 'list'}
-_ARRAY_TYPE_TO_NUMPY_DTYPE = {'byte[]': np.uint8, 'double[]': np.float64, 'int[]': np.int32}
-_JAVA_TYPE_NAME_TO_PYTHON_TYPE = {'boolean': bool, 'byte[]': np.ndarray,
-                                  'double': float, 'double[]': np.ndarray, 'float': float,
-                                  'int': int, 'int[]': np.ndarray, 'java.lang.String': str,
-                                  'long': int, 'short': int, 'char': int, 'byte': int, 'void': None}
 
 if __name__ == '__main__':
     #Test basic bridge operations

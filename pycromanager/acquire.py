@@ -5,7 +5,8 @@ from inspect import signature
 import copy
 import types
 import time
-from pycromanager.core import serialize_array, deserialize_array, Bridge
+from pycromanager import Bridge
+._core._java_objects import serialize_array, deserialize_array
 
 ### These functions outside class to prevent problems with pickling when running them in differnet process
 

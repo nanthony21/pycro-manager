@@ -1,5 +1,6 @@
-name = 'pycromanager'
+name = 'pycromanager'  # TODO what is this here for?
+__version__ = '0.0.1'
 
-from pycromanager.acquire import Acquisition, multi_d_acquisition_events
-from pycromanager.core import Bridge, JavaObjectShadow
-from pycromanager.data import Dataset
+from .acquire import Acquisition, multi_d_acquisition_events
+from ._core import Bridge, JavaObjectShadow
+from .data import Dataset

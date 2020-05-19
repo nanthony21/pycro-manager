@@ -8,8 +8,6 @@ package org.micromanager.internal.zmq;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import mmcorej.org.json.JSONException;
-import mmcorej.org.json.JSONObject;
 import org.zeromq.SocketType;
 
 /**
@@ -36,6 +34,7 @@ public class ZMQPullSocket<T> extends ZMQSocketWrapper {
    public T next() {
       try {
          String message = new String(socket_.recv());
+         Gson
          JSONObject json = new JSONObject(message);
          return (T) deserializationFunction_.apply(json);
       } catch (JSONException ex) {

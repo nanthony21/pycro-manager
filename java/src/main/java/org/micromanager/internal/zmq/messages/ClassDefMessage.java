@@ -3,15 +3,12 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-package org.micromanager.internal.zmq;
+package org.micromanager.internal.zmq.messages;
 
 /**
  *
- * @author henrypinkard
+ * @author Nick Anthony <nickmanthony at hotmail.com>
  */
-public interface SerializableObject {
-   
-   public byte[] serialize();
-   
-   
+public class ClassDefMessage extends DefaultMessage{
+    
 }

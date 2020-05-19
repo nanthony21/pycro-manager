@@ -17,27 +17,11 @@ import mmcorej.org.json.JSONObject;
  */
 public abstract class DefaultMessage implements Message {
     static String MSG_TYPE = "msgType";
+    
     public JSONObject toJson() throws JSONException {
         JSONObject obj = this.getMessageContents();
         obj.put(MSG_TYPE, this.getClass().getName());
         return obj;
-    }
-    
-    public static DefaultMessage fromJson(JSONObject json, Class<? extends Message> clazz) throws JSONException {
-        if (!json.getString(MSG_TYPE).equals(clazz.getName())) {
-            throw new JSONException("Wrong message class used to decode message JSON.");
-        }
-        Message msg = clazz.newInstance();
-        Iterator<String it = json.keys();
-        
-        try {
-            for (Field field : clazz.getFields()) {
-                json.put(field.getName(), field.get(this));
-            }
-        } catch (IllegalAccessException e) {
-            throw new RuntimeException(e);
-        }
-        return json;
     }
     
     public JSONObject getMessageContents() throws JSONException {

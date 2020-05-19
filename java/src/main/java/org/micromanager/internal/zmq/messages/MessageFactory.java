@@ -31,6 +31,7 @@ public class MessageFactory {
             case NEWCONNECTION:
                 return NewConnectionMessage.class;
         }
+        throw new RuntimeException("A case was not handled.");
     }
     
     public static List<String> getFieldNames(Types type) {
@@ -52,13 +53,15 @@ public class MessageFactory {
         try {
             for (Types type : Types.values()) {
                 if (json.get(MSG_TYPE).equals(getClass(type))) {
-                    DefaultMessage msg = getClass(type).newInstance();
+                    Class<? extends DefaultMessage> msgClass = getClass(type);
+                    DefaultMessage msg = msgClass.newInstance();
                     for (String fieldName : getFieldNames(type)) {
-                        
+                       msgClass.getField(fieldName).set(msg, json.get(fieldName));
                     }
+                    return msg;
                 }
             }
-        } catch (InstantiationException | IllegalAccessException e) {
+        } catch (InstantiationException | IllegalAccessException | NoSuchFieldException e) {
             throw new RuntimeException(e);
         }
         throw new RuntimeException("No valid class found");
